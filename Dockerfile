@@ -34,11 +34,6 @@ ENV HOME=/home/node
 ENV TERM=xterm-256color
 RUN chmod +x /app/docker-entrypoint.sh
 
-# Security hardening: Run as non-root user
-# The node:22-bookworm image includes a 'node' user (uid 1000)
-# This reduces the attack surface by preventing container escape via root privileges
-USER node
-
 EXPOSE 18789 18790
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["sh", "-c", "node dist/index.js gateway --bind ${OPENCLAW_GATEWAY_BIND:-lan} --port ${OPENCLAW_GATEWAY_PORT:-18789}"]
