@@ -1,6 +1,9 @@
 services:
   openclaw-gateway:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
     environment:
       HOME: /home/node
       TERM: xterm-256color
@@ -26,6 +29,9 @@ services:
 
   openclaw-cli:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
     environment:
       HOME: /home/node
       TERM: xterm-256color
