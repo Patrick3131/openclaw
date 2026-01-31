@@ -111,6 +111,8 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - OpenRouter: `openrouter` (`OPENROUTER_API_KEY`)
 - Example model: `openrouter/anthropic/claude-sonnet-4-5`
+- DeepSeek: `deepseek` (`DEEPSEEK_API_KEY`)
+- Example model: `deepseek/deepseek-chat`
 - xAI: `xai` (`XAI_API_KEY`)
 - Groq: `groq` (`GROQ_API_KEY`)
 - Cerebras: `cerebras` (`CEREBRAS_API_KEY`)

@@ -139,4 +139,31 @@ describe("models-config", () => {
       expect(parsed.providers["custom-proxy"]?.baseUrl).toBe("http://localhost:4000/v1");
     });
   });
+
+  it("includes deepseek provider when DEEPSEEK_API_KEY is set", async () => {
+    await withTempHome(async () => {
+      vi.resetModules();
+      const prevKey = process.env.DEEPSEEK_API_KEY;
+      process.env.DEEPSEEK_API_KEY = "sk-deepseek-test";
+      try {
+        const { ensureOpenClawModelsJson } = await import("./models-config.js");
+        const { resolveOpenClawAgentDir } = await import("./agent-paths.js");
+
+        await ensureOpenClawModelsJson({ models: { providers: {} } });
+
+        const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
+        const raw = await fs.readFile(modelPath, "utf8");
+        const parsed = JSON.parse(raw) as {
+          providers: Record<string, { baseUrl?: string; models?: Array<{ id: string }> }>;
+        };
+        expect(parsed.providers.deepseek?.baseUrl).toBe("https://api.deepseek.com/v1");
+        const ids = parsed.providers.deepseek?.models?.map((model) => model.id);
+        expect(ids).toContain("deepseek-chat");
+        expect(ids).toContain("deepseek-reasoner");
+      } finally {
+        if (prevKey === undefined) delete process.env.DEEPSEEK_API_KEY;
+        else process.env.DEEPSEEK_API_KEY = prevKey;
+      }
+    });
+  });
 });

@@ -8,10 +8,26 @@ read_when:
 DeepSeek provides an OpenAI-compatible API. OpenClaw registers it as the `deepseek`
 provider and uses the OpenAI chat completions API.
 
-## Quick setup
+## Quick setup (recommended)
 
 1) Set `DEEPSEEK_API_KEY`.
-2) Set your default model to a DeepSeek model id.
+2) Set your default model.
+
+```json5
+{
+  env: { DEEPSEEK_API_KEY: "sk-..." },
+  agents: {
+    defaults: {
+      model: { primary: "deepseek/deepseek-chat" }
+    }
+  }
+}
+```
+
+## Explicit provider config (advanced)
+
+If you want to pin the provider config in `openclaw.json`, include a model list
+to satisfy schema validation:
 
 ```json5
 {
@@ -21,7 +37,27 @@ provider and uses the OpenAI chat completions API.
     providers: {
       deepseek: {
         baseUrl: "https://api.deepseek.com/v1",
-        api: "openai-completions"
+        api: "openai-completions",
+        models: [
+          {
+            id: "deepseek-chat",
+            name: "DeepSeek Chat",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 128000,
+            maxTokens: 8000
+          },
+          {
+            id: "deepseek-reasoner",
+            name: "DeepSeek Reasoner",
+            reasoning: true,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 128000,
+            maxTokens: 64000
+          }
+        ]
       }
     }
   },
