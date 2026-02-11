@@ -5,23 +5,34 @@ import {
   resolveCopilotApiToken,
 } from "../providers/github-copilot-token.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
-import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
+import {
+  buildCloudflareAiGatewayModelDefinition,
+  resolveCloudflareAiGatewayBaseUrl,
+} from "./cloudflare-ai-gateway.js";
+import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
 import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
   SYNTHETIC_MODEL_CATALOG,
 } from "./synthetic-models.js";
+import {
+  TOGETHER_BASE_URL,
+  TOGETHER_MODEL_CATALOG,
+  buildTogetherModelDefinition,
+} from "./together-models.js";
 import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
 
 const MINIMAX_API_BASE_URL = "https://api.minimax.chat/v1";
+const MINIMAX_PORTAL_BASE_URL = "https://api.minimax.io/anthropic";
 const MINIMAX_DEFAULT_MODEL_ID = "MiniMax-M2.1";
 const MINIMAX_DEFAULT_VISION_MODEL_ID = "MiniMax-VL-01";
 const MINIMAX_DEFAULT_CONTEXT_WINDOW = 200000;
 const MINIMAX_DEFAULT_MAX_TOKENS = 8192;
+const MINIMAX_OAUTH_PLACEHOLDER = "minimax-oauth";
 // Pricing: MiniMax doesn't publish public rates. Override in models.json for accurate costs.
 const MINIMAX_API_COST = {
   input: 15,
@@ -97,6 +108,17 @@ const OLLAMA_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+export const QIANFAN_BASE_URL = "https://qianfan.baidubce.com/v2";
+export const QIANFAN_DEFAULT_MODEL_ID = "deepseek-v3.2";
+const QIANFAN_DEFAULT_CONTEXT_WINDOW = 98304;
+const QIANFAN_DEFAULT_MAX_TOKENS = 32768;
+const QIANFAN_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 interface OllamaModel {
   name: string;
   modified_at: string;
@@ -112,13 +134,31 @@ interface OllamaTagsResponse {
   models: OllamaModel[];
 }
 
-async function discoverOllamaModels(): Promise<ModelDefinitionConfig[]> {
+/**
+ * Derive the Ollama native API base URL from a configured base URL.
+ *
+ * Users typically configure `baseUrl` with a `/v1` suffix (e.g.
+ * `http://192.168.20.14:11434/v1`) for the OpenAI-compatible endpoint.
+ * The native Ollama API lives at the root (e.g. `/api/tags`), so we
+ * strip the `/v1` suffix when present.
+ */
+export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
+  if (!configuredBaseUrl) {
+    return OLLAMA_API_BASE_URL;
+  }
+  // Strip trailing slash, then strip /v1 suffix if present
+  const trimmed = configuredBaseUrl.replace(/\/+$/, "");
+  return trimmed.replace(/\/v1$/i, "");
+}
+
+async function discoverOllamaModels(baseUrl?: string): Promise<ModelDefinitionConfig[]> {
   // Skip Ollama discovery in test environments
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return [];
   }
   try {
-    const response = await fetch(`${OLLAMA_API_BASE_URL}/api/tags`, {
+    const apiBase = resolveOllamaApiBase(baseUrl);
+    const response = await fetch(`${apiBase}/api/tags`, {
       signal: AbortSignal.timeout(5000),
     });
     if (!response.ok) {
@@ -142,6 +182,11 @@ async function discoverOllamaModels(): Promise<ModelDefinitionConfig[]> {
         cost: OLLAMA_DEFAULT_COST,
         contextWindow: OLLAMA_DEFAULT_CONTEXT_WINDOW,
         maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
+        // Disable streaming by default for Ollama to avoid SDK issue #1205
+        // See: https://github.com/badlogic/pi-mono/issues/1205
+        params: {
+          streaming: false,
+        },
       };
     });
   } catch (error) {
@@ -158,7 +203,9 @@ function normalizeApiKeyConfig(value: string): string {
 
 function resolveEnvApiKeyVarName(provider: string): string | undefined {
   const resolved = resolveEnvApiKey(provider);
-  if (!resolved) return undefined;
+  if (!resolved) {
+    return undefined;
+  }
   const match = /^(?:env: |shell env: )([A-Z0-9_]+)$/.exec(resolved.source);
   return match ? match[1] : undefined;
 }
@@ -174,16 +221,26 @@ function resolveApiKeyFromProfiles(params: {
   const ids = listProfilesForProvider(params.store, params.provider);
   for (const id of ids) {
     const cred = params.store.profiles[id];
-    if (!cred) continue;
-    if (cred.type === "api_key") return cred.key;
-    if (cred.type === "token") return cred.token;
+    if (!cred) {
+      continue;
+    }
+    if (cred.type === "api_key") {
+      return cred.key;
+    }
+    if (cred.type === "token") {
+      return cred.token;
+    }
   }
   return undefined;
 }
 
 export function normalizeGoogleModelId(id: string): string {
-  if (id === "gemini-3-pro") return "gemini-3-pro-preview";
-  if (id === "gemini-3-flash") return "gemini-3-flash-preview";
+  if (id === "gemini-3-pro") {
+    return "gemini-3-pro-preview";
+  }
+  if (id === "gemini-3-flash") {
+    return "gemini-3-flash-preview";
+  }
   return id;
 }
 
@@ -191,7 +248,9 @@ function normalizeGoogleProvider(provider: ProviderConfig): ProviderConfig {
   let mutated = false;
   const models = provider.models.map((model) => {
     const nextId = normalizeGoogleModelId(model.id);
-    if (nextId === model.id) return model;
+    if (nextId === model.id) {
+      return model;
+    }
     mutated = true;
     return { ...model, id: nextId };
   });
@@ -203,7 +262,9 @@ export function normalizeProviders(params: {
   agentDir: string;
 }): ModelsConfig["providers"] {
   const { providers } = params;
-  if (!providers) return providers;
+  if (!providers) {
+    return providers;
+  }
   const authStore = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
   });
@@ -253,7 +314,9 @@ export function normalizeProviders(params: {
 
     if (normalizedKey === "google") {
       const googleNormalized = normalizeGoogleProvider(normalizedProvider);
-      if (googleNormalized !== normalizedProvider) mutated = true;
+      if (googleNormalized !== normalizedProvider) {
+        mutated = true;
+      }
       normalizedProvider = googleNormalized;
     }
 
@@ -290,19 +353,19 @@ function buildMinimaxProvider(): ProviderConfig {
   };
 }
 
-function buildMoonshotProvider(): ProviderConfig {
+function buildMinimaxPortalProvider(): ProviderConfig {
   return {
-    baseUrl: MOONSHOT_BASE_URL,
-    api: "openai-completions",
+    baseUrl: MINIMAX_PORTAL_BASE_URL,
+    api: "anthropic-messages",
     models: [
       {
-        id: MOONSHOT_DEFAULT_MODEL_ID,
-        name: "Kimi K2.5",
+        id: MINIMAX_DEFAULT_MODEL_ID,
+        name: "MiniMax M2.1",
         reasoning: false,
         input: ["text"],
-        cost: MOONSHOT_DEFAULT_COST,
-        contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
-        maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
+        cost: MINIMAX_API_COST,
+        contextWindow: MINIMAX_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MINIMAX_DEFAULT_MAX_TOKENS,
       },
     ],
   };
@@ -335,21 +398,37 @@ function buildDeepseekProvider(): ProviderConfig {
   };
 }
 
-function buildKimiCodeProvider(): ProviderConfig {
+function buildMoonshotProvider(): ProviderConfig {
   return {
-    baseUrl: KIMI_CODE_BASE_URL,
+    baseUrl: MOONSHOT_BASE_URL,
     api: "openai-completions",
     models: [
       {
-        id: KIMI_CODE_MODEL_ID,
-        name: "Kimi For Coding",
-        reasoning: true,
+        id: MOONSHOT_DEFAULT_MODEL_ID,
+        name: "Kimi K2.5",
+        reasoning: false,
         input: ["text"],
-        cost: KIMI_CODE_DEFAULT_COST,
-        contextWindow: KIMI_CODE_CONTEXT_WINDOW,
-        maxTokens: KIMI_CODE_MAX_TOKENS,
-        headers: KIMI_CODE_HEADERS,
-        compat: KIMI_CODE_COMPAT,
+        cost: MOONSHOT_DEFAULT_COST,
+        contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
+function buildKimiCodeProvider(): ProviderConfig {
+  return {
+    baseUrl: MOONSHOT_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: MOONSHOT_DEFAULT_MODEL_ID,
+        name: "Kimi K2.5",
+        reasoning: false,
+        input: ["text"],
+        cost: MOONSHOT_DEFAULT_COST,
+        contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
       },
     ],
   };
@@ -417,17 +496,53 @@ async function buildVeniceProvider(): Promise<ProviderConfig> {
   };
 }
 
-async function buildOllamaProvider(): Promise<ProviderConfig> {
-  const models = await discoverOllamaModels();
+async function buildOllamaProvider(configuredBaseUrl?: string): Promise<ProviderConfig> {
+  const models = await discoverOllamaModels(configuredBaseUrl);
   return {
-    baseUrl: OLLAMA_BASE_URL,
+    baseUrl: configuredBaseUrl ?? OLLAMA_BASE_URL,
     api: "openai-completions",
     models,
   };
 }
 
+function buildTogetherProvider(): ProviderConfig {
+  return {
+    baseUrl: TOGETHER_BASE_URL,
+    api: "openai-completions",
+    models: TOGETHER_MODEL_CATALOG.map(buildTogetherModelDefinition),
+  };
+}
+
+export function buildQianfanProvider(): ProviderConfig {
+  return {
+    baseUrl: QIANFAN_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: QIANFAN_DEFAULT_MODEL_ID,
+        name: "DEEPSEEK V3.2",
+        reasoning: true,
+        input: ["text"],
+        cost: QIANFAN_DEFAULT_COST,
+        contextWindow: QIANFAN_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: QIANFAN_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "ernie-5.0-thinking-preview",
+        name: "ERNIE-5.0-Thinking-Preview",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: QIANFAN_DEFAULT_COST,
+        contextWindow: 119000,
+        maxTokens: 64000,
+      },
+    ],
+  };
+}
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
+  explicitProviders?: Record<string, ProviderConfig> | null;
 }): Promise<ModelsConfig["providers"]> {
   const providers: Record<string, ProviderConfig> = {};
   const authStore = ensureAuthProfileStore(params.agentDir, {
@@ -439,6 +554,14 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "minimax", store: authStore });
   if (minimaxKey) {
     providers.minimax = { ...buildMinimaxProvider(), apiKey: minimaxKey };
+  }
+
+  const minimaxOauthProfile = listProfilesForProvider(authStore, "minimax-portal");
+  if (minimaxOauthProfile.length > 0) {
+    providers["minimax-portal"] = {
+      ...buildMinimaxPortalProvider(),
+      apiKey: MINIMAX_OAUTH_PLACEHOLDER,
+    };
   }
 
   const moonshotKey =
@@ -491,12 +614,60 @@ export async function resolveImplicitProviders(params: {
     providers.xiaomi = { ...buildXiaomiProvider(), apiKey: xiaomiKey };
   }
 
-  // Ollama provider - only add if explicitly configured
+  const cloudflareProfiles = listProfilesForProvider(authStore, "cloudflare-ai-gateway");
+  for (const profileId of cloudflareProfiles) {
+    const cred = authStore.profiles[profileId];
+    if (cred?.type !== "api_key") {
+      continue;
+    }
+    const accountId = cred.metadata?.accountId?.trim();
+    const gatewayId = cred.metadata?.gatewayId?.trim();
+    if (!accountId || !gatewayId) {
+      continue;
+    }
+    const baseUrl = resolveCloudflareAiGatewayBaseUrl({ accountId, gatewayId });
+    if (!baseUrl) {
+      continue;
+    }
+    const apiKey = resolveEnvApiKeyVarName("cloudflare-ai-gateway") ?? cred.key?.trim() ?? "";
+    if (!apiKey) {
+      continue;
+    }
+    providers["cloudflare-ai-gateway"] = {
+      baseUrl,
+      api: "anthropic-messages",
+      apiKey,
+      models: [buildCloudflareAiGatewayModelDefinition()],
+    };
+    break;
+  }
+
+  // Ollama provider - only add if explicitly configured.
+  // Use the user's configured baseUrl (from explicit providers) for model
+  // discovery so that remote / non-default Ollama instances are reachable.
   const ollamaKey =
     resolveEnvApiKeyVarName("ollama") ??
     resolveApiKeyFromProfiles({ provider: "ollama", store: authStore });
   if (ollamaKey) {
-    providers.ollama = { ...(await buildOllamaProvider()), apiKey: ollamaKey };
+    const ollamaBaseUrl = params.explicitProviders?.ollama?.baseUrl;
+    providers.ollama = { ...(await buildOllamaProvider(ollamaBaseUrl)), apiKey: ollamaKey };
+  }
+
+  const togetherKey =
+    resolveEnvApiKeyVarName("together") ??
+    resolveApiKeyFromProfiles({ provider: "together", store: authStore });
+  if (togetherKey) {
+    providers.together = {
+      ...buildTogetherProvider(),
+      apiKey: togetherKey,
+    };
+  }
+
+  const qianfanKey =
+    resolveEnvApiKeyVarName("qianfan") ??
+    resolveApiKeyFromProfiles({ provider: "qianfan", store: authStore });
+  if (qianfanKey) {
+    providers.qianfan = { ...buildQianfanProvider(), apiKey: qianfanKey };
   }
 
   return providers;
@@ -507,12 +678,16 @@ export async function resolveImplicitCopilotProvider(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<ProviderConfig | null> {
   const env = params.env ?? process.env;
-  const authStore = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
+  const authStore = ensureAuthProfileStore(params.agentDir, {
+    allowKeychainPrompt: false,
+  });
   const hasProfile = listProfilesForProvider(authStore, "github-copilot").length > 0;
   const envToken = env.COPILOT_GITHUB_TOKEN ?? env.GH_TOKEN ?? env.GITHUB_TOKEN;
   const githubToken = (envToken ?? "").trim();
 
-  if (!hasProfile && !githubToken) return null;
+  if (!hasProfile && !githubToken) {
+    return null;
+  }
 
   let selectedGithubToken = githubToken;
   if (!selectedGithubToken && hasProfile) {
@@ -568,12 +743,21 @@ export async function resolveImplicitBedrockProvider(params: {
   const discoveryConfig = params.config?.models?.bedrockDiscovery;
   const enabled = discoveryConfig?.enabled;
   const hasAwsCreds = resolveAwsSdkEnvVarName(env) !== undefined;
-  if (enabled === false) return null;
-  if (enabled !== true && !hasAwsCreds) return null;
+  if (enabled === false) {
+    return null;
+  }
+  if (enabled !== true && !hasAwsCreds) {
+    return null;
+  }
 
   const region = discoveryConfig?.region ?? env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? "us-east-1";
-  const models = await discoverBedrockModels({ region, config: discoveryConfig });
-  if (models.length === 0) return null;
+  const models = await discoverBedrockModels({
+    region,
+    config: discoveryConfig,
+  });
+  if (models.length === 0) {
+    return null;
+  }
 
   return {
     baseUrl: `https://bedrock-runtime.${region}.amazonaws.com`,
