@@ -4,10 +4,14 @@ function isOpenAiCompletionsModel(model: Model<Api>): model is Model<"openai-com
   return model.api === "openai-completions";
 }
 
+function isOpenAiOrZaiCompletionsModel(model: Model<Api>): model is Model<"openai-completions" | "zai-completions"> {
+  return model.api === "openai-completions" || model.api === "zai-completions";
+}
+
 export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   const baseUrl = model.baseUrl ?? "";
   const isZai = model.provider === "zai" || baseUrl.includes("api.z.ai");
-  if (!isZai || !isOpenAiCompletionsModel(model)) {
+  if (!isZai || !isOpenAiOrZaiCompletionsModel(model)) {
     return model;
   }
 

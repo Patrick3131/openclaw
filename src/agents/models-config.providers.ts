@@ -119,6 +119,19 @@ const QIANFAN_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+// Z.AI (Zhipu AI) - GLM Coding Plan
+// https://docs.z.ai/devpack/tool/openclaw
+const ZAI_BASE_URL = "https://api.z.ai/api/paas/v4";
+const ZAI_DEFAULT_MODEL_ID = "glm-4.7";
+const ZAI_DEFAULT_CONTEXT_WINDOW = 128000;
+const ZAI_DEFAULT_MAX_TOKENS = 8192;
+const ZAI_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 interface OllamaModel {
   name: string;
   modified_at: string;
@@ -540,6 +553,24 @@ export function buildQianfanProvider(): ProviderConfig {
   };
 }
 
+function buildZaiProvider(): ProviderConfig {
+  return {
+    baseUrl: ZAI_BASE_URL,
+    api: "zai-completions",
+    models: [
+      {
+        id: ZAI_DEFAULT_MODEL_ID,
+        name: "GLM-4.7",
+        reasoning: true,
+        input: ["text"],
+        cost: ZAI_DEFAULT_COST,
+        contextWindow: ZAI_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: ZAI_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
@@ -668,6 +699,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "qianfan", store: authStore });
   if (qianfanKey) {
     providers.qianfan = { ...buildQianfanProvider(), apiKey: qianfanKey };
+  }
+
+  const zaiKey =
+    resolveEnvApiKeyVarName("zai") ??
+    resolveApiKeyFromProfiles({ provider: "zai", store: authStore });
+  if (zaiKey) {
+    providers.zai = { ...buildZaiProvider(), apiKey: zaiKey };
   }
 
   return providers;

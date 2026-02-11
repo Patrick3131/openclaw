@@ -236,6 +236,9 @@ describe("getApiKeyForModel", () => {
   it("resolves Synthetic API key from env", async () => {
     const previousSynthetic = process.env.SYNTHETIC_API_KEY;
 
+  it("resolves ZAI API key from env", async () => {
+    const previousZai = process.env.ZAI_API_KEY;
+
     try {
       process.env.SYNTHETIC_API_KEY = "synthetic-test-key";
 
